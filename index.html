@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WebSocket Player Test</title>
+  <style>
+    body { font-family: sans-serif; }
+    #log p { margin: 2px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <h1>WebSocket Player Test</h1>
+  <div id="info"></div>
+  <div id="controls">
+    <button id="startBtn" class="hidden">ゲーム開始</button>
+  </div>
+  <div id="log"></div>
+
+  <script>
+    // ユーザーIDをローカルに保存しておく（初回は空 → サーバーからもらう）
+    let uid = localStorage.getItem("player_uid");
+    let wsUrl = "wss://YOUR-RENDER-APP.onrender.com/ws";
+    if (uid) {
+      wsUrl += "?uid=" + uid;
+    }
+
+    const ws = new WebSocket(wsUrl);
+
+    const infoDiv = document.getElementById("info");
+    const logDiv = document.getElementById("log");
+    const startBtn = document.getElementById("startBtn");
+
+    ws.onmessage = (event) => {
+      const msg = event.data;
+      console.log("RECV:", msg);
+
+      if (msg.startsWith("ASSIGN_ID")) {
+        // サーバーから新しいUUIDを受け取った場合
+        uid = msg.split(" ")[1];
+        localStorage.setItem("player_uid", uid);
+        logDiv.innerHTML += `<p>新しいIDを割り当て: ${uid}</p>`;
+      }
+      else if (msg.startsWith("JOINED")) {
+        const slot = msg.split(" ")[1];
+        infoDiv.innerHTML = `<p>あなたは <b>${slot}</b> です</p>`;
+        if (slot === "1P") {
+          startBtn.classList.remove("hidden");
+          infoDiv.innerHTML += "<p>あなたは部屋のホストです</p>";
+        } else {
+          infoDiv.innerHTML += "<p>ゲーム開始を待っています</p>";
+        }
+      }
+      else if (msg.startsWith("GAME_START")) {
+        infoDiv.innerHTML += `<p><b>ゲームが開始されました！</b></p>`;
+      }
+      else if (msg === "FULL") {
+        infoDiv.innerHTML = "<p><b>満員のため参加できません</b></p>";
+      }
+      else {
+        logDiv.innerHTML += `<p>${msg}</p>`;
+      }
+    };
+
+    ws.onopen = () => {
+      logDiv.innerHTML += "<p>接続しました</p>";
+    };
+
+    ws.onclose = () => {
+      logDiv.innerHTML += "<p>接続が閉じられました</p>";
+    };
+
+    startBtn.onclick = () => {
+      ws.send("START");
+    };
+  </script>
+</body>
+</html>
