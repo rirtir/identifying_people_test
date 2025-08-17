@@ -20,7 +20,7 @@
   <script>
     // ユーザーIDをローカルに保存しておく（初回は空 → サーバーからもらう）
     let uid = localStorage.getItem("player_uid");
-    let wsUrl = "wss://YOUR-RENDER-APP.onrender.com/ws";
+    let wsUrl = "wss://identifying-people-test.onrender.com/ws";
     if (uid) {
       wsUrl += "?uid=" + uid;
     }
@@ -76,3 +76,4 @@
   </script>
 </body>
 </html>
+
