@@ -1,79 +1,225 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>WebSocket Player Test</title>
+  <meta charset="utf-8" />
+  <title>Lobby / Game / Spectate Demo</title>
   <style>
-    body { font-family: sans-serif; }
-    #log p { margin: 2px; }
+    body { font-family: sans-serif; padding: 12px; }
+    #controls > * { margin-right: 6px; }
     .hidden { display: none; }
+    #log { margin-top: 12px; border-top: 1px solid #ddd; padding-top: 8px; max-height: 240px; overflow:auto; }
+    .slot { margin: 2px 0; }
+    .area { margin-top: 12px; padding: 8px; border: 1px solid #eee; border-radius: 6px; }
+    button { padding: 6px 10px; }
   </style>
 </head>
 <body>
-  <h1>WebSocket Player Test</h1>
-  <div id="info"></div>
-  <div id="controls">
-    <button id="startBtn" class="hidden">ゲーム開始</button>
+  <h2>ロビー</h2>
+
+  <div id="lobby" class="area">
+    <p>現在のモード: <span id="mode">ロビー</span></p>
+    <div id="controls">
+      <button id="enterGameBtn">ゲームエリアに入る</button>
+      <button id="enterSpecBtn">観戦エリアに入る</button>
+      <button id="leaveGameBtn" class="hidden">ゲームエリアを抜ける</button>
+      <button id="goLobbyBtn" class="hidden">ロビーに戻る</button>
+    </div>
+
+    <div id="myInfo"></div>
+
+    <div id="slots" style="margin-top:8px;">
+      <h4>参加プレイヤー（スロット）</h4>
+      <div id="slotList">—</div>
+    </div>
+
+    <div id="gameControls" style="margin-top:8px;">
+      <button id="startBtn" class="hidden">ゲーム開始（1Pのみ）</button>
+    </div>
   </div>
-  <div id="log"></div>
+
+  <div id="log" aria-live="polite"></div>
 
   <script>
-    // ユーザーIDをローカルに保存しておく（初回は空 → サーバーからもらう）
+    // UID は localStorage に保存
     let uid = localStorage.getItem("player_uid");
-    let wsUrl = "wss://identifying-people-test.onrender.com/ws";
-    if (uid) {
-      wsUrl += "?uid=" + uid;
-    }
-
+    const wsBase = (() => {
+      // 適宜サーバーURLに変更してください（http(s) -> ws(s)）
+      const origin = location.origin;
+      if (origin.startsWith("https://")) return "wss://" + location.host + "/ws";
+      if (origin.startsWith("http://")) return "ws://" + location.host + "/ws";
+      return "ws://localhost:10000/ws";
+    })();
+    let wsUrl = wsBase + (uid ? ("?uid=" + uid) : "");
     const ws = new WebSocket(wsUrl);
 
-    const infoDiv = document.getElementById("info");
+    const modeSpan = document.getElementById("mode");
+    const enterGameBtn = document.getElementById("enterGameBtn");
+    const enterSpecBtn = document.getElementById("enterSpecBtn");
+    const leaveGameBtn = document.getElementById("leaveGameBtn");
+    const goLobbyBtn = document.getElementById("goLobbyBtn");
+    const myInfo = document.getElementById("myInfo");
+    const slotList = document.getElementById("slotList");
     const logDiv = document.getElementById("log");
     const startBtn = document.getElementById("startBtn");
 
-    ws.onmessage = (event) => {
-      const msg = event.data;
-      console.log("RECV:", msg);
+    let mySlot = null;
+    let inGameArea = false;
+    let gameStarted = false;
 
-      if (msg.startsWith("ASSIGN_ID")) {
-        // サーバーから新しいUUIDを受け取った場合
-        uid = msg.split(" ")[1];
-        localStorage.setItem("player_uid", uid);
-        logDiv.innerHTML += `<p>新しいIDを割り当て: ${uid}</p>`;
+    function log(text) {
+      const p = document.createElement("div");
+      p.textContent = text;
+      logDiv.appendChild(p);
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function updateUIMode() {
+      if (inGameArea) {
+        modeSpan.textContent = "ゲームエリア";
+        enterGameBtn.classList.add("hidden");
+        enterSpecBtn.classList.add("hidden");
+        leaveGameBtn.classList.remove("hidden");
+        goLobbyBtn.classList.remove("hidden");
+      } else {
+        modeSpan.textContent = "ロビー / 観戦";
+        enterGameBtn.classList.remove("hidden");
+        enterSpecBtn.classList.remove("hidden");
+        leaveGameBtn.classList.add("hidden");
+        goLobbyBtn.classList.add("hidden");
       }
-      else if (msg.startsWith("JOINED")) {
-        const slot = msg.split(" ")[1];
-        infoDiv.innerHTML = `<p>あなたは <b>${slot}</b> です</p>`;
-        if (slot === "1P") {
-          startBtn.classList.remove("hidden");
-          infoDiv.innerHTML += "<p>あなたは部屋のホストです</p>";
-        } else {
-          infoDiv.innerHTML += "<p>ゲーム開始を待っています</p>";
-        }
+      // start ボタンは 1P かつゲーム未開始でゲームエリアにいる場合のみ表示
+      if (mySlot === "1P" && inGameArea && !gameStarted) {
+        startBtn.classList.remove("hidden");
+      } else {
+        startBtn.classList.add("hidden");
       }
-      else if (msg.startsWith("GAME_START")) {
-        infoDiv.innerHTML += `<p><b>ゲームが開始されました！</b></p>`;
-      }
-      else if (msg === "FULL") {
-        infoDiv.innerHTML = "<p><b>満員のため参加できません</b></p>";
-      }
-      else {
-        logDiv.innerHTML += `<p>${msg}</p>`;
-      }
-    };
+    }
 
     ws.onopen = () => {
-      logDiv.innerHTML += "<p>接続しました</p>";
+      log("WebSocket 接続");
+      // 初期はロビー（特に何もしない）
+    };
+
+    ws.onmessage = (ev) => {
+      const msg = ev.data;
+      log("RECV: " + msg);
+
+      if (msg.startsWith("ASSIGN_ID")) {
+        uid = msg.split(" ")[1];
+        localStorage.setItem("player_uid", uid);
+        log("UID を保存しました: " + uid);
+        return;
+      }
+      if (msg === "CONNECTED") {
+        return;
+      }
+      if (msg.startsWith("JOINED")) {
+        const slot = msg.split(" ")[1];
+        mySlot = slot;
+        myInfo.innerHTML = `<p>あなたは <b>${slot}</b> です</p>`;
+        inGameArea = true;
+        updateUIMode();
+        return;
+      }
+      if (msg === "ONLY_SPECTATOR") {
+        // サーバがゲーム開始後にゲームエリア入室を拒否した場合
+        alert("現在のゲームは進行中です。観戦に切り替えます。");
+        inGameArea = false;
+        mySlot = null;
+        updateUIMode();
+        return;
+      }
+      if (msg.startsWith("SLOTS ")) {
+        try {
+          const jsonStr = msg.slice("SLOTS ".length);
+          const arr = JSON.parse(jsonStr);
+          // arr は {slot, uid} の配列
+          slotList.innerHTML = "";
+          arr.forEach(o => {
+            const div = document.createElement("div");
+            div.className = "slot";
+            div.textContent = `${o.slot} — ${o.uid}${o.uid === uid ? " (あなた)" : ""}`;
+            slotList.appendChild(div);
+          });
+          if (arr.length === 0) slotList.innerHTML = "（空）";
+        } catch (e) {
+          slotList.innerHTML = "（表示エラー）";
+        }
+        return;
+      }
+      if (msg.startsWith("GAME_START")) {
+        gameStarted = true;
+        log("ゲーム開始通知を受け取りました");
+        updateUIMode();
+        // ゲーム開始後は観戦者は観戦のみ可能；必要なら UI を追加
+        return;
+      }
+      if (msg.startsWith("PLAYER_DISCONNECTED")) {
+        // someone disconnected after start (keeps slot)
+        return;
+      }
+      if (msg.startsWith("PLAYER_LEFT")) {
+        // someone left after start (but we treat similarly)
+        return;
+      }
+      if (msg === "FULL") {
+        alert("満員のため参加できません");
+        return;
+      }
+      // その他メッセージはログ表示
     };
 
     ws.onclose = () => {
-      logDiv.innerHTML += "<p>接続が閉じられました</p>";
+      log("接続が切れました");
+    };
+
+    // UI handlers
+    enterGameBtn.onclick = () => {
+      if (gameStarted) {
+        // 既に開始中なら観戦へ誘導
+        if (!confirm("ゲームは既に開始しています。観戦しますか？")) return;
+        ws.send("ENTER_SPECTATE");
+        inGameArea = false;
+      } else {
+        ws.send("ENTER_GAME");
+      }
+    };
+
+    enterSpecBtn.onclick = () => {
+      ws.send("ENTER_SPECTATE");
+      inGameArea = false;
+      mySlot = null;
+      updateUIMode();
+    };
+
+    leaveGameBtn.onclick = () => {
+      ws.send("LEAVE_GAME");
+      mySlot = null;
+      inGameArea = false;
+      updateUIMode();
+    };
+
+    goLobbyBtn.onclick = () => {
+      // 単にロビー表示に戻る（接続は維持）
+      inGameArea = false;
+      updateUIMode();
     };
 
     startBtn.onclick = () => {
+      if (!confirm("本当にゲームを開始しますか？")) return;
       ws.send("START");
     };
+
+    // ページを閉じる際に（ゲーム未開始でゲームエリアにいる場合）明示的に leave を送っておくと
+    // サーバ側で即座に繰り上げ処理される（ネットワーク切断だけだと disconnect 時に処理される）。
+    window.addEventListener("beforeunload", () => {
+      try {
+        if (inGameArea && !gameStarted) {
+          ws.send("LEAVE_GAME");
+        }
+      } catch (e) {}
+    });
+
   </script>
 </body>
 </html>
-
