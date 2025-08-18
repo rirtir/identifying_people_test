@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Lobby / Game / Spectate Demo</title>
+  <title>Lobby / Game / Watch Demo</title>
   <style>
     body { font-family: sans-serif; padding: 12px; }
     #controls > * { margin-right: 6px; }
@@ -20,9 +20,9 @@
     <p>現在のモード: <span id="mode">ロビー</span></p>
     <div id="controls">
       <button id="enterGameBtn">ゲームエリアに入る</button>
-      <button id="enterSpecBtn">観戦エリアに入る</button>
+      <button id="enterWatchBtn">観戦エリアに入る</button>
       <button id="leaveGameBtn" class="hidden">ゲームエリアを抜ける</button>
-      <button id="goLobbyBtn" class="hidden">ロビーに戻る</button>
+      <button id="leaveWatchBtn" class="hidden">観戦エリアを抜ける</button>
     </div>
 
     <div id="myInfo"></div>
@@ -33,7 +33,7 @@
     </div>
 
     <div id="gameControls" style="margin-top:8px;">
-      <button id="startBtn" class="hidden">ゲーム開始（1Pのみ）</button>
+      <button id="startBtn" class="hidden">ゲーム開始（1Pのみ開始可能）</button>
     </div>
   </div>
 
@@ -54,9 +54,9 @@
 
     const modeSpan = document.getElementById("mode");
     const enterGameBtn = document.getElementById("enterGameBtn");
-    const enterSpecBtn = document.getElementById("enterSpecBtn");
+    const enterWatchBtn = document.getElementById("enterWatchBtn");
     const leaveGameBtn = document.getElementById("leaveGameBtn");
-    const goLobbyBtn = document.getElementById("goLobbyBtn");
+    const leaveWatchBtn = document.getElementById("leaveWatchBtn");
     const myInfo = document.getElementById("myInfo");
     const slotList = document.getElementById("slotList");
     const logDiv = document.getElementById("log");
@@ -64,6 +64,7 @@
 
     let mySlot = null;
     let inGameArea = false;
+    let inWatchArea = false;
     let gameStarted = false;
 
     function log(text) {
@@ -77,15 +78,21 @@
       if (inGameArea) {
         modeSpan.textContent = "ゲームエリア";
         enterGameBtn.classList.add("hidden");
-        enterSpecBtn.classList.add("hidden");
+        enterWatchBtn.classList.add("hidden");
         leaveGameBtn.classList.remove("hidden");
-        goLobbyBtn.classList.remove("hidden");
-      } else {
-        modeSpan.textContent = "ロビー / 観戦";
-        enterGameBtn.classList.remove("hidden");
-        enterSpecBtn.classList.remove("hidden");
+        leaveWatchBtn.classList.add("hidden");
+      } else if (inWatchArea) {
+        modeSpan.textContent = "観戦";
+        enterGameBtn.classList.add("hidden");
+        enterWatchBtn.classList.add("hidden");
         leaveGameBtn.classList.add("hidden");
-        goLobbyBtn.classList.add("hidden");
+        leaveWatchBtn.classList.remove("hidden");
+      } else {
+        modeSpan.textContent = "ロビー";
+        enterGameBtn.classList.remove("hidden");
+        enterWatchBtn.classList.remove("hidden");
+        leaveGameBtn.classList.add("hidden");
+        leaveWatchBtn.classList.add("hidden");
       }
       // start ボタンは 1P かつゲーム未開始でゲームエリアにいる場合のみ表示
       if (mySlot === "1P" && inGameArea && !gameStarted) {
@@ -101,27 +108,28 @@
     };
 
     ws.onmessage = (ev) => {
-      const msg = ev.data;
-      log("RECV: " + msg);
+      const msg = JSON.parse(event.data);
+      log("RECV: " + msg.type);
 
-      if (msg.startsWith("ASSIGN_ID")) {
-        uid = msg.split(" ")[1];
+      if (msg.type === "ASSIGN_ID") {
+        uid = msg.user_id;
         localStorage.setItem("player_uid", uid);
         log("UID を保存しました: " + uid);
         return;
       }
-      if (msg === "CONNECTED") {
+      if (msg.type === "CONNECTED") {
         return;
       }
-      if (msg.startsWith("JOINED")) {
-        const slot = msg.split(" ")[1];
+      if (msg.type === "JOINED") {
+        const slot = msg.slot;
         mySlot = slot;
         myInfo.innerHTML = `<p>あなたは <b>${slot}</b> です</p>`;
         inGameArea = true;
+        inWatchArea = false;
         updateUIMode();
         return;
       }
-      if (msg === "ONLY_SPECTATOR") {
+      if (msg.type === "ONLY_SPECTATOR") {
         // サーバがゲーム開始後にゲームエリア入室を拒否した場合
         alert("現在のゲームは進行中です。観戦に切り替えます。");
         inGameArea = false;
@@ -129,10 +137,9 @@
         updateUIMode();
         return;
       }
-      if (msg.startsWith("SLOTS ")) {
+      if (msg.type === "SLOTS") {
         try {
-          const jsonStr = msg.slice("SLOTS ".length);
-          const arr = JSON.parse(jsonStr);
+          const arr = msg.slots_info;
           // arr は {slot, uid} の配列
           slotList.innerHTML = "";
           arr.forEach(o => {
@@ -147,22 +154,22 @@
         }
         return;
       }
-      if (msg.startsWith("GAME_START")) {
+      if (msg.type === "GAME_START") {
         gameStarted = true;
         log("ゲーム開始通知を受け取りました");
         updateUIMode();
         // ゲーム開始後は観戦者は観戦のみ可能；必要なら UI を追加
         return;
       }
-      if (msg.startsWith("PLAYER_DISCONNECTED")) {
+      if (msg.type === "PLAYER_DISCONNECTED") {
         // someone disconnected after start (keeps slot)
         return;
       }
-      if (msg.startsWith("PLAYER_LEFT")) {
+      if (msg.type === "PLAYER_LEFT") {
         // someone left after start (but we treat similarly)
         return;
       }
-      if (msg === "FULL") {
+      if (msg.type === "FULL") {
         alert("満員のため参加できません");
         return;
       }
@@ -178,36 +185,41 @@
       if (gameStarted) {
         // 既に開始中なら観戦へ誘導
         if (!confirm("ゲームは既に開始しています。観戦しますか？")) return;
-        ws.send("ENTER_SPECTATE");
+        ws.send(JSON.stringify({type: "ENTER_SPECTATE"}));
         inGameArea = false;
+        inWatchArea = true;
       } else {
-        ws.send("ENTER_GAME");
+        ws.send(JSON.stringify({type: "ENTER_GAME"}));
       }
     };
 
-    enterSpecBtn.onclick = () => {
-      ws.send("ENTER_SPECTATE");
+    enterWatchBtn.onclick = () => {
+      ws.send(JSON.stringify({type: "ENTER_SPECTATE"}));
+      myInfo.innerHTML = ``;
+      inWatchArea = true;
       inGameArea = false;
       mySlot = null;
       updateUIMode();
     };
 
     leaveGameBtn.onclick = () => {
-      ws.send("LEAVE_GAME");
+      ws.send(JSON.stringify({type: "LEAVE_GAME"}));
+      myInfo.innerHTML = ``;
       mySlot = null;
       inGameArea = false;
       updateUIMode();
     };
 
-    goLobbyBtn.onclick = () => {
+    leaveWatchBtn.onclick = () => {
       // 単にロビー表示に戻る（接続は維持）
-      inGameArea = false;
+      myInfo.innerHTML = ``;
+      inWatchArea = false;
       updateUIMode();
     };
 
     startBtn.onclick = () => {
       if (!confirm("本当にゲームを開始しますか？")) return;
-      ws.send("START");
+      ws.send(JSON.stringify({type: "START"}));
     };
 
     // ページを閉じる際に（ゲーム未開始でゲームエリアにいる場合）明示的に leave を送っておくと
@@ -215,7 +227,7 @@
     window.addEventListener("beforeunload", () => {
       try {
         if (inGameArea && !gameStarted) {
-          ws.send("LEAVE_GAME");
+          ws.send(JSON.stringify({type: "LEAVE_GAME"}));
         }
       } catch (e) {}
     });
